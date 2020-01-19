@@ -122,7 +122,7 @@ class Fingerprint:
     def fingerprint(self) -> bytes:
         return self._fingerprint
 
-    def check(self, transport: asyncio.Transport) -> None:
+    def check(self, transport: asyncio.BaseTransport) -> None:
         if not transport.get_extra_info('sslcontext'):
             return
         sslobj = transport.get_extra_info('ssl_object')

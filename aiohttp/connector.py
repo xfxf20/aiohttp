@@ -16,7 +16,6 @@ from typing import (  # noqa
     Any,
     Awaitable,
     Callable,
-    ContextManager,
     DefaultDict,
     Dict,
     Iterator,
@@ -937,7 +936,9 @@ class TCPConnector(BaseConnector):
 
         for hinfo in hosts:
             host = hinfo['host']
+            assert host is not None
             port = hinfo['port']
+            assert port is not None
 
             try:
                 with _wrap_create_connection(
@@ -951,7 +952,7 @@ class TCPConnector(BaseConnector):
                             ssl=sslcontext, family=hinfo['family'],
                             proto=hinfo['proto'], flags=hinfo['flags'],
                             server_hostname=server_hostname,
-                            local_addr=self._local_addr,
+                            local_addr=self._local_addr,  # type: ignore
                         )
             except ClientConnectorError as exc:
                 last_exc = exc
@@ -963,11 +964,15 @@ class TCPConnector(BaseConnector):
                 except ServerFingerprintMismatch as exc:
                     transp.close()
                     if not self._cleanup_closed_disabled:
-                        self._cleanup_closed_transports.append(transp)
+                        # Actual transp type is asyncio.Transport,
+                        # drop type: ignore eventually
+                        self._cleanup_closed_transports.append(transp)  # type: ignore  # noqa
                     last_exc = exc
                     continue
 
-            return transp, proto
+            # Actual transp type is asyncio.Transport,
+            # drop type: ignore eventually
+            return transp, proto  # type: ignore
         assert last_exc is not None
         raise last_exc
 
@@ -1009,6 +1014,7 @@ class TCPConnector(BaseConnector):
 
         if req.is_ssl():
             sslcontext = self._get_ssl_context(req)
+            assert sslcontext is not None
             # For HTTPS requests over HTTP proxy
             # we must notify proxy to tunnel connection
             # so we send CONNECT command:
@@ -1038,10 +1044,29 @@ class TCPConnector(BaseConnector):
             else:
                 conn._protocol = None
                 conn._transport = None
+
+                if proxy_resp.status != 200:
+                    message = proxy_resp.reason
+                    transport.close()
+
+                    if message is None:
+                        data = RESPONSES.get(proxy_resp.status)
+                        if data is not None:
+                            message = RESPONSES[proxy_resp.status][0]
+                        else:
+                            message = "Unknown status code"
+                    raise ClientHttpProxyError(
+                        proxy_resp.request_info,
+                        proxy_resp.history,
+                        status=proxy_resp.status,
+                        message=message,
+                        headers=proxy_resp.headers)
+
                 if False and hasattr(self._loop, "start_tls"):
                     # Python 3.7+
                     return await self._start_tls_native(
                         transport,
+                        proto,
                         req,
                         proxy_resp,
                         sslcontext,
@@ -1050,6 +1075,7 @@ class TCPConnector(BaseConnector):
                 else:
                     return await self._start_tls_fallback(
                         transport,
+                        proto,
                         req,
                         proxy_resp,
                         sslcontext,
@@ -1063,32 +1089,34 @@ class TCPConnector(BaseConnector):
     async def _start_tls_native(
             self,
             transport: asyncio.Transport,
+            proto: ResponseHandler,
             req: 'ClientRequest',
             resp: 'ClientResponse',
             sslcontext: ssl.SSLContext,
             timeout: 'ClientTimeout'
-    ) -> Tuple[asyncio.Transport, asyncio.Protocol]:
-        pass
+    ) -> Tuple[asyncio.Transport, ResponseHandler]:
+        with _wrap_create_connection(req=req):
+
+            async with ceil_timeout(timeout.sock_connect):
+                transport = await self._loop.start_tls(  # type: ignore
+                    transport,
+                    proto,
+                    sslcontext,
+                    server_hostname=req.host,
+                )
+
+        return transport, proto
 
     async def _start_tls_fallback(
             self,
             transport: asyncio.Transport,
+            proto: ResponseHandler,
             req: 'ClientRequest',
             resp: 'ClientResponse',
             sslcontext: ssl.SSLContext,
             timeout: 'ClientTimeout'
-    ) -> Tuple[asyncio.Transport, asyncio.Protocol]:
+    ) -> Tuple[asyncio.Transport, ResponseHandler]:
         try:
-            if resp.status != 200:
-                message = resp.reason
-                if message is None:
-                    message = RESPONSES[resp.status][0]
-                raise ClientHttpProxyError(
-                    resp.request_info,
-                    resp.history,
-                    status=resp.status,
-                    message=message,
-                    headers=resp.headers)
             rawsock = transport.get_extra_info('socket', default=None)
             if rawsock is None:
                 raise RuntimeError(
@@ -1100,7 +1128,7 @@ class TCPConnector(BaseConnector):
 
         with _wrap_create_connection(req=req):
             async with ceil_timeout(timeout.sock_connect):
-                transport, proto = await self._loop.create_connection(
+                transport, proto = await self._loop.create_connection(  # type: ignore  # noqa
                     self._factory,
                     ssl=sslcontext, sock=rawsock,
                     server_hostname=req.host,
@@ -1137,12 +1165,10 @@ class UnixConnector(BaseConnector):
     async def _create_connection(self, req: 'ClientRequest',
                                  traces: List['Trace'],
                                  timeout: 'ClientTimeout') -> ResponseHandler:
-        try:
+        with _wrap_create_connection(req):
             async with ceil_timeout(timeout.sock_connect):
                 _, proto = await self._loop.create_unix_connection(
                     self._factory, self._path)
-        except OSError as exc:
-            raise ClientConnectorError(req.connection_key, exc) from exc
 
         return cast(ResponseHandler, proto)
 
@@ -1181,7 +1207,7 @@ class NamedPipeConnector(BaseConnector):
     async def _create_connection(self, req: 'ClientRequest',
                                  traces: List['Trace'],
                                  timeout: 'ClientTimeout') -> ResponseHandler:
-        try:
+        with _wrap_create_connection(req):
             async with ceil_timeout(timeout.sock_connect):
                 _, proto = await self._loop.create_pipe_connection(  # type: ignore # noqa
                     self._factory, self._path
@@ -1193,8 +1219,6 @@ class NamedPipeConnector(BaseConnector):
                 await asyncio.sleep(0)
                 # other option is to manually set transport like
                 # `proto.transport = trans`
-        except OSError as exc:
-            raise ClientConnectorError(req.connection_key, exc) from exc
 
         return cast(ResponseHandler, proto)
 
@@ -1203,7 +1227,7 @@ class NamedPipeConnector(BaseConnector):
 def _wrap_create_connection(
     req: 'ClientRequest',
     client_error: Type[Exception]=ClientConnectorError
-) -> ContextManager[None]:
+) -> Iterator[None]:
     try:
         yield
     except cert_errors as exc:
