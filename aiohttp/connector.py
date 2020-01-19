@@ -70,7 +70,7 @@ __all__ = ('BaseConnector', 'TCPConnector', 'UnixConnector',
 
 if TYPE_CHECKING:  # pragma: no cover
     from .client import ClientTimeout  # noqa
-    from .client_reqrep import ConnectionKey  # noqa
+    from .client_reqrep import ConnectionKey, ClientResponse  # noqa
     from .tracing import Trace  # noqa
 
 
@@ -1040,7 +1040,7 @@ class TCPConnector(BaseConnector):
                 protocol = conn._protocol
                 assert protocol is not None
                 protocol.set_response_params()
-                resp = await proxy_resp.start(conn)
+                await proxy_resp.start(conn)
             except BaseException:
                 proxy_resp.close()
                 conn.close()
@@ -1048,33 +1048,71 @@ class TCPConnector(BaseConnector):
             else:
                 conn._protocol = None
                 conn._transport = None
-                try:
-                    if resp.status != 200:
-                        message = resp.reason
-                        if message is None:
-                            message = RESPONSES[resp.status][0]
-                        raise ClientHttpProxyError(
-                            proxy_resp.request_info,
-                            resp.history,
-                            status=resp.status,
-                            message=message,
-                            headers=resp.headers)
-                    rawsock = transport.get_extra_info('socket', default=None)
-                    if rawsock is None:
-                        raise RuntimeError(
-                            "Transport does not expose socket instance")
-                    # Duplicate the socket, so now we can close proxy transport
-                    rawsock = rawsock.dup()
-                finally:
-                    transport.close()
-
-                transport, proto = await self._wrap_create_connection(
-                    self._factory, timeout=timeout,
-                    ssl=sslcontext, sock=rawsock,
-                    server_hostname=req.host,
-                    req=req)
+                if False and hasattr(self._loop, "start_tls"):
+                    # Python 3.7+
+                    return await self._start_tls_native(
+                        transport,
+                        req,
+                        proxy_resp,
+                        sslcontext,
+                        timeout
+                    )
+                else:
+                    return await self._start_tls_fallback(
+                        transport,
+                        req,
+                        proxy_resp,
+                        sslcontext,
+                        timeout
+                    )
             finally:
                 proxy_resp.close()
+
+        return transport, proto
+
+    async def _start_tls_native(
+            self,
+            transport: asyncio.Transport,
+            req: 'ClientRequest',
+            resp: 'ClientResponse',
+            sslcontext: ssl.SSLContext,
+            timeout: 'ClientTimeout'
+    ) -> Tuple[asyncio.Transport, asyncio.Protocol]:
+        pass
+
+    async def _start_tls_fallback(
+            self,
+            transport: asyncio.Transport,
+            req: 'ClientRequest',
+            resp: 'ClientResponse',
+            sslcontext: ssl.SSLContext,
+            timeout: 'ClientTimeout'
+    ) -> Tuple[asyncio.Transport, asyncio.Protocol]:
+        try:
+            if resp.status != 200:
+                message = resp.reason
+                if message is None:
+                    message = RESPONSES[resp.status][0]
+                raise ClientHttpProxyError(
+                    resp.request_info,
+                    resp.history,
+                    status=resp.status,
+                    message=message,
+                    headers=resp.headers)
+            rawsock = transport.get_extra_info('socket', default=None)
+            if rawsock is None:
+                raise RuntimeError(
+                    "Transport does not expose socket instance")
+            # Duplicate the socket, so now we can close proxy transport
+            rawsock = rawsock.dup()
+        finally:
+            transport.close()
+
+        transport, proto = await self._wrap_create_connection(
+            self._factory, timeout=timeout,
+            ssl=sslcontext, sock=rawsock,
+            server_hostname=req.host,
+            req=req)
 
         return transport, proto
 

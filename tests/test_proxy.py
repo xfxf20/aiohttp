@@ -21,6 +21,8 @@ class TestProxy(unittest.TestCase):
     clientrequest_mock_attrs = {
         'return_value.send.return_value.start':
             make_mocked_coro(mocked_response),
+        'return_value.send':
+            make_mocked_coro(mocked_response),
     }
 
     def setUp(self):
@@ -167,8 +169,9 @@ class TestProxy(unittest.TestCase):
                                     traces=[],
                                     loop=self.loop,
                                     session=mock.Mock())
+        proxy_resp.status = 200
         proxy_req.send = make_mocked_coro(proxy_resp)
-        proxy_resp.start = make_mocked_coro(mock.Mock(status=200))
+        proxy_resp.start = make_mocked_coro(proxy_resp)
 
         async def make_conn():
             return aiohttp.TCPConnector()
@@ -212,8 +215,9 @@ class TestProxy(unittest.TestCase):
                                     traces=[],
                                     loop=self.loop,
                                     session=mock.Mock())
+        proxy_resp.status = 200
         proxy_req.send = make_mocked_coro(proxy_resp)
-        proxy_resp.start = make_mocked_coro(mock.Mock(status=200))
+        proxy_resp.start = make_mocked_coro(proxy_resp)
 
         async def make_conn():
             return aiohttp.TCPConnector()
@@ -262,8 +266,9 @@ class TestProxy(unittest.TestCase):
                                     traces=[],
                                     loop=self.loop,
                                     session=mock.Mock())
+        proxy_resp.status = 200
         proxy_req.send = make_mocked_coro(proxy_resp)
-        proxy_resp.start = make_mocked_coro(mock.Mock(status=200))
+        proxy_resp.start = make_mocked_coro(proxy_resp)
 
         async def make_conn():
             return aiohttp.TCPConnector()
@@ -312,8 +317,9 @@ class TestProxy(unittest.TestCase):
                                     traces=[],
                                     loop=self.loop,
                                     session=mock.Mock())
+        proxy_resp.status = 200
         proxy_req.send = make_mocked_coro(proxy_resp)
-        proxy_resp.start = make_mocked_coro(mock.Mock(status=200))
+        proxy_resp.start = make_mocked_coro(proxy_resp)
 
         async def make_conn():
             return aiohttp.TCPConnector()
@@ -354,9 +360,10 @@ class TestProxy(unittest.TestCase):
                                     traces=[],
                                     loop=self.loop,
                                     session=mock.Mock())
+        proxy_resp.status = 400
+        proxy_resp.reason = 'bad request'
         proxy_req.send = make_mocked_coro(proxy_resp)
-        proxy_resp.start = make_mocked_coro(
-            mock.Mock(status=400, reason='bad request'))
+        proxy_resp.start = make_mocked_coro(proxy_resp)
 
         async def make_conn():
             return aiohttp.TCPConnector()
@@ -476,8 +483,9 @@ class TestProxy(unittest.TestCase):
                                     traces=[],
                                     loop=self.loop,
                                     session=mock.Mock())
+        proxy_resp.status = 200
         proxy_req.send = make_mocked_coro(proxy_resp)
-        proxy_resp.start = make_mocked_coro(mock.Mock(status=200))
+        proxy_resp.start = make_mocked_coro(proxy_resp)
 
         async def make_conn():
             return aiohttp.TCPConnector()
@@ -529,8 +537,9 @@ class TestProxy(unittest.TestCase):
                                     traces=[],
                                     loop=self.loop,
                                     session=mock.Mock())
+        proxy_resp.status = 200
         proxy_req.send = make_mocked_coro(proxy_resp)
-        proxy_resp.start = make_mocked_coro(mock.Mock(status=200))
+        proxy_resp.start = make_mocked_coro(proxy_resp)
 
         async def make_conn():
             return aiohttp.TCPConnector()
