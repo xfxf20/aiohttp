@@ -6,7 +6,7 @@ import sys
 import traceback
 import warnings
 from collections import defaultdict, deque
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from http.cookies import SimpleCookie
 from itertools import cycle, islice
 from time import monotonic
@@ -16,6 +16,7 @@ from typing import (  # noqa
     Any,
     Awaitable,
     Callable,
+    ContextManager,
     DefaultDict,
     Dict,
     Iterator,
@@ -904,23 +905,6 @@ class TCPConnector(BaseConnector):
             return ret
         return None
 
-    async def _wrap_create_connection(
-            self, *args: Any,
-            req: 'ClientRequest',
-            timeout: 'ClientTimeout',
-            client_error: Type[Exception]=ClientConnectorError,
-            **kwargs: Any) -> Tuple[asyncio.Transport, ResponseHandler]:
-        try:
-            async with ceil_timeout(timeout.sock_connect):
-                return await self._loop.create_connection(*args, **kwargs)  # type: ignore  # noqa
-        except cert_errors as exc:
-            raise ClientConnectorCertificateError(
-                req.connection_key, exc) from exc
-        except ssl_errors as exc:
-            raise ClientConnectorSSLError(req.connection_key, exc) from exc
-        except OSError as exc:
-            raise client_error(req.connection_key, exc) from exc
-
     async def _create_direct_connection(
             self,
             req: 'ClientRequest',
@@ -956,13 +940,19 @@ class TCPConnector(BaseConnector):
             port = hinfo['port']
 
             try:
-                transp, proto = await self._wrap_create_connection(
-                    self._factory, host, port, timeout=timeout,
-                    ssl=sslcontext, family=hinfo['family'],
-                    proto=hinfo['proto'], flags=hinfo['flags'],
-                    server_hostname=hinfo['hostname'] if sslcontext else None,
-                    local_addr=self._local_addr,
-                    req=req, client_error=client_error)
+                with _wrap_create_connection(
+                    req=req,
+                    client_error=client_error
+                ):
+                    server_hostname = hinfo['hostname'] if sslcontext else None
+                    async with ceil_timeout(timeout.sock_connect):
+                        transp, proto = await self._loop.create_connection(
+                            self._factory, host, port,
+                            ssl=sslcontext, family=hinfo['family'],
+                            proto=hinfo['proto'], flags=hinfo['flags'],
+                            server_hostname=server_hostname,
+                            local_addr=self._local_addr,
+                        )
             except ClientConnectorError as exc:
                 last_exc = exc
                 continue
@@ -1108,11 +1098,13 @@ class TCPConnector(BaseConnector):
         finally:
             transport.close()
 
-        transport, proto = await self._wrap_create_connection(
-            self._factory, timeout=timeout,
-            ssl=sslcontext, sock=rawsock,
-            server_hostname=req.host,
-            req=req)
+        with _wrap_create_connection(req=req):
+            async with ceil_timeout(timeout.sock_connect):
+                transport, proto = await self._loop.create_connection(
+                    self._factory,
+                    ssl=sslcontext, sock=rawsock,
+                    server_hostname=req.host,
+                )
 
         return transport, proto
 
@@ -1205,3 +1197,19 @@ class NamedPipeConnector(BaseConnector):
             raise ClientConnectorError(req.connection_key, exc) from exc
 
         return cast(ResponseHandler, proto)
+
+
+@contextmanager
+def _wrap_create_connection(
+    req: 'ClientRequest',
+    client_error: Type[Exception]=ClientConnectorError
+) -> ContextManager[None]:
+    try:
+        yield
+    except cert_errors as exc:
+        raise ClientConnectorCertificateError(
+            req.connection_key, exc) from exc
+    except ssl_errors as exc:
+        raise ClientConnectorSSLError(req.connection_key, exc) from exc
+    except OSError as exc:
+        raise client_error(req.connection_key, exc) from exc
