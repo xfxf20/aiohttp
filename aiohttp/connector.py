@@ -1095,14 +1095,17 @@ class TCPConnector(BaseConnector):
             sslcontext: ssl.SSLContext,
             timeout: 'ClientTimeout'
     ) -> Tuple[asyncio.Transport, ResponseHandler]:
+        # the real limitation is timeout.sock_connect,
+        # 10 min liiks like "infinity" for the process
+        ssl_handshake_timeout = 600
         with _wrap_create_connection(req=req):
-
             async with ceil_timeout(timeout.sock_connect):
                 transport = await self._loop.start_tls(  # type: ignore
                     transport,
                     proto,
                     sslcontext,
                     server_hostname=req.host,
+                    ssl_handshake_timeout=ssl_handshake_timeout
                 )
 
         return transport, proto
