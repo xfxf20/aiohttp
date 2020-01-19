@@ -1096,7 +1096,7 @@ class TCPConnector(BaseConnector):
             timeout: 'ClientTimeout'
     ) -> Tuple[asyncio.Transport, ResponseHandler]:
         # the real limitation is timeout.sock_connect,
-        # 10 min liiks like "infinity" for the process
+        # 10 min looks like "infinity" for the process
         ssl_handshake_timeout = 600
         with _wrap_create_connection(req=req):
             async with ceil_timeout(timeout.sock_connect):
