@@ -3,6 +3,7 @@ import datetime
 import io
 import re
 import socket
+import ssl
 import string
 import tempfile
 import types
@@ -227,6 +228,30 @@ class BaseRequest(MutableMapping[str, Any], HeadersMixin):
     @property
     def writer(self) -> AbstractStreamWriter:
         return self._payload_writer
+
+    async def _start_tls(
+        self,
+        sslcontext: ssl.SSLContext,
+        *,
+        ssl_handshake_timeout: Optional[float]=None
+    ) -> None:
+        # Note: preferred interface is await request.connection.start_tls()
+        # but the Connection class doesn't exist yet.
+        # read(n) and write(n), get_extra_info(name)
+        # are possible methods as well.
+        # On the another hand, HTTP2 connections has no such method.
+        #
+        # Also, start_tls doesn't always exists but is available
+        # starting from Python 3.7 only.
+        # Let's not decide now but add *private* method for testing
+        # HTTPS proxies only.
+        transp = await self._loop.start_tls(
+            self._protocol.transport,
+            self._protocol,
+            sslcontext,
+            ssl_handshake_timeout=ssl_handshake_timeout
+        )
+        assert transp is self._protocol.transport
 
     @reify
     def rel_url(self) -> URL:

@@ -1100,15 +1100,17 @@ class TCPConnector(BaseConnector):
         ssl_handshake_timeout = 600
         with _wrap_create_connection(req=req):
             async with ceil_timeout(timeout.sock_connect):
-                transport = await self._loop.start_tls(  # type: ignore
+                transp = await self._loop.start_tls(  # type: ignore
                     transport,
                     proto,
                     sslcontext,
+                    server_side=False,
                     server_hostname=req.host,
                     ssl_handshake_timeout=ssl_handshake_timeout
                 )
+                assert proto.transport is transp
 
-        return transport, proto
+        return transp, proto
 
     async def _start_tls_fallback(
             self,
