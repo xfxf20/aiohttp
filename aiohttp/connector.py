@@ -1062,7 +1062,7 @@ class TCPConnector(BaseConnector):
                         message=message,
                         headers=proxy_resp.headers)
 
-                if False and hasattr(self._loop, "start_tls"):
+                if hasattr(self._loop, "start_tls"):
                     # Python 3.7+
                     return await self._start_tls_native(
                         transport,
@@ -1100,6 +1100,7 @@ class TCPConnector(BaseConnector):
         ssl_handshake_timeout = 600
         with _wrap_create_connection(req=req):
             async with ceil_timeout(timeout.sock_connect):
+                print("START CLIENT TLS", req.host, req.url, transport.get_extra_info("peername"))
                 transp = await self._loop.start_tls(  # type: ignore
                     transport,
                     proto,
@@ -1108,6 +1109,7 @@ class TCPConnector(BaseConnector):
                     server_hostname=req.host,
                     ssl_handshake_timeout=ssl_handshake_timeout
                 )
+                print("START CLIENT TLS DONE")
                 assert proto.transport is transp
 
         return transp, proto
@@ -1131,6 +1133,7 @@ class TCPConnector(BaseConnector):
         finally:
             transport.close()
 
+        breakpoint()
         with _wrap_create_connection(req=req):
             async with ceil_timeout(timeout.sock_connect):
                 transport, proto = await self._loop.create_connection(  # type: ignore  # noqa

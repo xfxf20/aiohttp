@@ -11,20 +11,32 @@ from aiohttp import hdrs, web
 
 
 @pytest.fixture
-def proxy_server(aiohttp_raw_server, aiohttp_server, loop):
+def proxy_server(aiohttp_raw_server, aiohttp_server,
+                 ssl_ctx, client_ssl_ctx,
+                 loop):
     # Handle all proxy requests and imitate remote server response.
 
     session = None
 
-    async def proxy_handler(request):
-        if request.method == 'CONNECT':
-            raise web.HTTPMethodNotAllowed(
-                "CONNECT",
-                hdrs.METH_ALL - {hdrs.METH_CONNECT}
-            )
+    async def proxy_handler(req):
+        if req.method == 'CONNECT':
+            # Upgrade to HTTPS
+            resp = web.StreamResponse()
+            resp.content_length = 0
+            await resp.prepare(req)
+            await resp.write_eof()
+            print("BEFORE_TLS")
+            try:
+                await req._start_tls(ssl_ctx)
+            except Exception as exc:
+                print(exc)
+                raise
+            print("CONNECT")
+            return req
 
-        data = await request.read()
-        headers = request.headers.copy()
+        print("PROXY SERVER", req.method, req.url)
+        data = await req.read()
+        headers = req.headers.copy()
         headers.pop(hdrs.HOST, None)
         proxy_auth = headers.pop(hdrs.PROXY_AUTHORIZATION, None)
         proxy_authenticate = headers.pop(hdrs.PROXY_AUTHORIZATION, None)
@@ -32,8 +44,8 @@ def proxy_server(aiohttp_raw_server, aiohttp_server, loop):
         assert proxy_authenticate is None
 
         async with session.request(
-            request.method,
-            request.rel_url,
+            req.method,
+            req.rel_url,
             headers=headers,
             data=data
         ) as inner_resp:
@@ -41,21 +53,28 @@ def proxy_server(aiohttp_raw_server, aiohttp_server, loop):
                 status=inner_resp.status,
                 headers=inner_resp.headers
             )
-            await resp.prepare(request)
+            await resp.prepare(req)
             content = await inner_resp.read()
             await resp.write(content)
             await resp.write_eof()
             return resp
 
-    async def run(app):
+    async def run(app, *, ssl=False):
         nonlocal session
-        session = aiohttp.ClientSession()
+        if ssl:
+            connector = aiohttp.TCPConnector(ssl=client_ssl_ctx)
+            server_ssl = ssl_ctx
+        else:
+            connector = aiohttp.TCPConnector()
+            server_ssl = None
+        session = aiohttp.ClientSession(connector=connector)
 
-        server = await aiohttp_server(app)
+        server = await aiohttp_server(app, ssl=server_ssl)
         remote_url = server.make_url('/')
         proxy_server = await aiohttp_raw_server(proxy_handler)
         proxy_url = proxy_server.make_url('/')
 
+        print(f"proxy_url={proxy_url}, remote_url={remote_url}")
         return proxy_url, remote_url
 
     yield run
@@ -64,74 +83,49 @@ def proxy_server(aiohttp_raw_server, aiohttp_server, loop):
         loop.run_until_complete(session.close())
 
 
-@pytest.fixture
-def pproxy_server(aiohttp_server, aiohttp_unused_port, loop):
-    # Handle all proxy requests and imitate remote server response.
-    proc = None
-
-    async def run(app, *, ssl=None):
-        nonlocal proc
-        server = await aiohttp_server(app)
-        remote_url = server.make_url('/')
-
-        port = aiohttp_unused_port()
-        proxy_url = URL("http://127.0.0.1").with_port(port)
-        proc = await asyncio.create_subprocess_exec(
-            "pproxy",
-            "-l",
-            str(proxy_url)
-        )
-        return proxy_url, remote_url
-
-    yield run
-
-    if proc is not None:
-        proc.kill()
-        loop.run_until_complete(proc.wait())
-
-
 async def test_proxy_http_absolute_path(proxy_server) -> None:
     routes = web.RouteTableDef()
 
     @routes.get("/path")
-    async def handler(request):
-        assert request.path == "/path"
-        assert request.query == {"query": "yes"}
+    async def handler(req):
+        assert req.path == "/path"
+        assert req.query == {"query": "yes"}
         return web.Response(text="OK")
 
     app = web.Application()
     app.add_routes(routes)
 
     proxy_url, remote_url = await proxy_server(app)
-    async with aiohttp.request(
-        "GET",
-        (remote_url / "path").with_query(query="yes"),
-        proxy=proxy_url
-    ) as resp:
-        assert resp.status == 200
-        assert await resp.text() == "OK"
+    async with aiohttp.ClientSession() as client:
+        async with client.get(
+            (remote_url / "path").with_query(query="yes"),
+            proxy=proxy_url
+        ) as resp:
+            assert resp.status == 200
+            assert await resp.text() == "OK"
 
 
-async def test_pproxy_https_absolute_path(pproxy_server) -> None:
+async def test_proxy_https_absolute_path(proxy_server, client_ssl_ctx) -> None:
     routes = web.RouteTableDef()
 
     @routes.get("/path")
-    async def handler(request):
-        assert request.path == "/path"
-        assert request.query == {"query": "yes"}
+    async def handler(req):
+        assert req.path == "/path"
+        assert req.query == {"query": "yes"}
         return web.Response(text="OK")
 
     app = web.Application()
     app.add_routes(routes)
 
-    proxy_url, remote_url = await pproxy_server(app)
-    async with aiohttp.request(
-        "GET",
-        (remote_url / "path").with_query(query="yes"),
-        proxy=proxy_url
-    ) as resp:
-        assert resp.status == 200
-        assert await resp.text() == "OK"
+    proxy_url, remote_url = await proxy_server(app, ssl=True)
+    connector = aiohttp.TCPConnector(ssl=client_ssl_ctx)
+    async with aiohttp.ClientSession(connector=connector) as client:
+        async with client.get(
+            (remote_url / "path").with_query(query="yes"),
+            proxy=proxy_url
+        ) as resp:
+            assert resp.status == 200
+            assert await resp.text() == "OK"
 
 
 async def xtest_proxy_http_raw_path(proxy_server, get_request) -> None:
